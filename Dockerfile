@@ -27,8 +27,6 @@ COPY . /tmp/go-neb
 WORKDIR /tmp/go-neb
 
 # Set Go environment variables for CGO.
-# -D_LARGEFILE64_SOURCE might not be strictly necessary on glibc (Debian) as it was for musl (Alpine)
-# but keeping CGO flags for library paths is important.
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig
 ENV CGO_LDFLAGS="-L/usr/local/lib -L/usr/local/lib64"
 ENV CGO_CFLAGS="-I/usr/local/include"
@@ -51,16 +49,17 @@ RUN go build -ldflags="-w -s" -tags="static,netgo" -o go-neb github.com/matrix-o
 # RUN chmod +x /tmp/go-neb/hooks/pre-commit
 # RUN /tmp/go-neb/hooks/pre-commit
 
-# Stage 2: Create the final lightweight image using Alpine
-FROM alpine:3.19
+# Stage 2: Create the final lightweight image using Debian Slim
+FROM debian:bullseye-slim AS final
 
-# Add gcompat for glibc compatibility if needed, as libolm and go-neb (with CGO) were built on Debian (glibc)
-RUN apk add --no-cache \
-      libstdc++ \
+# Install runtime dependencies
+# Replaced su-exec with gosu
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libstdc++6 \
       ca-certificates \
-      su-exec \
+      gosu \
       s6 \
-      gcompat
+    && rm -rf /var/lib/apt/lists/*
 
 ENV BIND_ADDRESS=:4050 \
     DATABASE_TYPE=sqlite3 \
@@ -71,15 +70,13 @@ ENV BIND_ADDRESS=:4050 \
 # Copy the compiled binary from the builder stage
 COPY --from=builder /tmp/go-neb/go-neb /usr/local/bin/go-neb
 
-# Copy libolm.so* from the Debian build stage
-# Ensure all necessary shared library parts are copied.
+# Copy libolm.so.3 from the Debian build stage
 COPY --from=builder /usr/local/lib/libolm.so.3 /usr/local/lib/libolm.so.3
-# If libolm.so points to libolm.so.3, you might not need libolm.so explicitly,
-# but copying the specific versioned file is safer.
 
 # Create non-root user and group
-RUN addgroup -g ${GID} neb && \
-    adduser -u ${UID} -G neb -D -h /data neb
+# Use addgroup and adduser commands compatible with Debian
+RUN addgroup --gid ${GID} neb && \
+    adduser --uid ${UID} --gid ${GID} --disabled-password --gecos "" --home /data neb
 
 # Copy s6 service definitions
 COPY docker/root /
